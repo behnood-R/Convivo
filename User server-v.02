@@ -1,0 +1,63 @@
+from flask_pymongo import pymongo
+from flask import Flask
+from flask import Flask,jsonify,request
+import sys
+client = pymongo.MongoClient('mongodb://adminuser:Farnood2019@docdb-2019-11-19-17-18-38.cluster-cilajgzl9zks.us-east-1.docdb.amazonaws.com:27017/?ssl=true&ssl_ca_certs=rds-combined-ca-bundle.pem&replicaSet=rs0')
+db = client.UserDB
+col = db.UserCollection
+#client.close()
+
+app = Flask(__name__)
+
+
+@app.route('/api/users/<userid>' , methods=['GET'])
+def get_user_test(userid):
+    doc = col.find_one({"userId" :  userid } )
+    if doc == None:
+        return 'User does not exist', 404
+    else:
+        del doc['_id']
+        return doc
+
+@app.route('/api/users/<userid>/profile' , methods=['GET'])
+def get_profile_test(userid):
+    doc = col.find_one({"userId" :  userid } )
+    if doc == None:
+        return 'User does not exist', 404
+    else:
+        return doc['profile']
+
+@app.route('/api/users/<userid>', methods=['PUT'])
+def put_user_test(userid):
+    if col.find_one({"userId" :  userid }) != None:
+        return 'User already exists', 403
+    else:
+        payload = request.json
+        newuser = {
+            'userId': userid,
+            'notifications': [{'userId':'','type':'welcome'}],
+            'failedMatches':[],
+            'profile':payload
+        }
+        col.insert_one(newuser)
+        return 'Done'
+
+@app.route('/api/users/<userid>/profile', methods=['PUT'])
+def put_profile_test(userid):
+    payload = request.json
+    col.update({'userId' : userid}, {'$set':{'profile' : payload}})
+    return 'Done'
+
+@app.route('/api/users/<userid>/notifications', methods=['POST'])
+def post_notification_test(userid):
+    payload = request.json
+    col.update({'userId' : userid}, {'$push':{'notifications' : payload}})
+    return 'Done'
+
+#future
+@app.route('/api/users/<userid>/notifications', methods=['DELETE'])
+def delete_notifications_test(userid):
+    return ({'message' : "Done"})
+
+if __name__== "__main__":
+    app.run(host="0.0.0.0", port=88)
