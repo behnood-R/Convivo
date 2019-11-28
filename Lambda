@@ -1,0 +1,414 @@
+import json
+from pymongo import MongoClient
+import logging
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+ABSYES = 2
+ABSNO = -2
+
+AGEWINDOW = 3
+BUDGETTOLERANCE = 0.2
+
+MAXSCORE = 24 #actually 28
+MINSCORE = -20 #actually -22
+
+
+def lambda_handler(event, context):
+    client = MongoClient('mongodb://adminuser:Farnood2019@docdb-2019-11-19-17-18-38.cilajgzl9zks.us-east-1.docdb.amazonaws.com:27017/?ssl=true&ssl_ca_certs=rds-combined-ca-bundle.pem')
+    users = client.UserDB.UserCollection
+    matches = client.MatchesDB.MatchesCollection
+    payload = json.loads(event['body'])
+    compute(payload, users, matches)
+    # TODO implement
+    return {
+        'statusCode': 200,
+        'body': json.dumps('computation started')
+    }
+
+
+def compute(cu, userCollection, matchesCollection):
+    
+    #start by picking the compatible users from the DB
+    
+    currentUser=cu['profile']
+    query = {'userId':{'$ne':cu['userId']}, 'profile.targetCity':currentUser['targetCity']}
+
+    #querying the fields that are in personalData
+    personalQuery = {}
+
+    if currentUser['preferences']['sameGenderPref'] == ABSYES:
+        personalQuery['gender'] = currentUser['personalData']['gender']
+    elif currentUser['preferences']['sameGenderPref'] == ABSNO:
+        personalQuery['gender'] = {'$ne': currentUser['personalData']['gender']}
+
+    if currentUser['preferences']['sameNationalityPref'] == ABSYES:
+        personalQuery['nationality.code'] = currentUser['personalData']['nationality']['code']
+    elif currentUser['preferences']['sameNationalityPref'] == ABSNO:
+        personalQuery['nationality.code'] = {'$ne': currentUser['personalData']['nationality']['code']}
+
+    if currentUser['preferences']['sameAgePref'] == ABSYES:
+        personalQuery['age'] = {'$gte': currentUser['personalData']['age']-AGEWINDOW, '$lte':currentUser['personalData']['age']+AGEWINDOW}
+    elif currentUser['preferences']['sameAgePref'] == ABSNO:
+        personalQuery['age'] = {'$lte': currentUser['personalData']['age']-AGEWINDOW, '$gte':currentUser['personalData']['age']+AGEWINDOW}
+
+    #querying the fields that are in livingData
+    livingQuery = {}
+    
+    if currentUser['preferences']['sameOccupationPref'] == ABSYES:
+        livingQuery['occupation'] = currentUser['livingData']['occupation']
+    elif currentUser['preferences']['sameOccupationPref'] == ABSNO:
+        livingQuery['occupation'] = {'$ne': currentUser['livingData']['occupation']}
+
+    if currentUser['preferences']['childrenPref'] == ABSYES:
+        livingQuery['hasChildren'] = True
+    elif currentUser['preferences']['childrenPref'] == ABSNO:
+        livingQuery['hasChildren'] = False
+
+    if currentUser['preferences']['petsPref'] == ABSYES:
+        livingQuery['hasPets'] = True
+    elif currentUser['preferences']['petsPref'] == ABSNO:
+        livingQuery['hasPets'] = False
+
+    if currentUser['preferences']['cleaningPref'] == ABSYES:
+        livingQuery['cleaningHabits'] = {'$gte':0}
+    elif currentUser['preferences']['cleaningPref'] == ABSNO:
+        livingQuery['cleaningHabits'] = {'$lt':0}
+
+    if currentUser['preferences']['smokingPref'] == ABSYES:
+        livingQuery['smokingHabits'] = {'$gte':0}
+    elif currentUser['preferences']['smokingPref'] == ABSNO:
+        livingQuery['smokingHabits'] = {'$lt':0}
+
+    if currentUser['preferences']['drinkingPref'] == ABSYES:
+        livingQuery['drinkingHabits'] = {'$gte':0}
+    elif currentUser['preferences']['drinkingPref'] == ABSNO:
+        livingQuery['drinkingHabits'] = {'$lt':0}
+
+    if currentUser['preferences']['drugsPref'] == ABSYES:
+        livingQuery['drugsHabits'] = {'$gte':0}
+    elif currentUser['preferences']['drugsPref'] == ABSNO:
+        livingQuery['drugsHabits'] = {'$lt':0}
+
+    if currentUser['preferences']['guestsPref'] == ABSYES:
+        livingQuery['guestsHabits'] = {'$gte':0}
+    elif currentUser['preferences']['guestsPref'] == ABSNO:
+        livingQuery['guestsHabits'] = {'$lt':0}
+
+    #querying the fields that are in preferences
+    preferenceQuery = {'maxBudget':{'$lte': currentUser['preferences']['maxBudget']*(1+BUDGETTOLERANCE)}}
+
+    if currentUser['preferences']['livingPref'] == ABSYES:
+        preferenceQuery['livingPref'] = {'$gte':0}
+    elif currentUser['preferences']['livingPref'] == ABSNO:
+        preferenceQuery['livingPref'] = {'$lt':0}
+    
+    if currentUser['preferences']['livingPref'] >= 0:
+        preferenceQuery['livingPref'] = {'$ne':ABSNO}
+    else:
+        preferenceQuery['livingPref'] = {'$ne':ABSYES}
+
+    if currentUser['livingData']['hasPets']:
+        preferenceQuery['petsPref'] = {'$ne':ABSNO}
+    else:
+        preferenceQuery['petsPref'] = {'$ne':ABSYES}
+
+    if currentUser['livingData']['hasChildren']:
+        preferenceQuery['childrenPref'] = {'$ne':ABSNO}
+    else:
+        preferenceQuery['childrenPref'] = {'$ne':ABSYES}
+
+
+    if currentUser['livingData']['cleaningHabits'] >= 0:
+        preferenceQuery['cleaningPref'] = {'$ne':ABSNO}
+    else:
+        preferenceQuery['cleaningPref'] = {'$ne':ABSYES}
+
+    if currentUser['livingData']['drinkingHabits'] >= 0:
+        preferenceQuery['drinkingPref'] = {'$ne':ABSNO}
+    else:
+        preferenceQuery['drinkingPref'] = {'$ne':ABSYES}
+
+    if currentUser['livingData']['smokingHabits'] >= 0:
+        preferenceQuery['smokingPref'] = {'$ne':ABSNO}
+    else:
+        preferenceQuery['smokingPref'] = {'$ne':ABSYES}
+
+    if currentUser['livingData']['drugsHabits'] >= 0:
+        preferenceQuery['drugsPref'] = {'$ne':ABSNO}
+    else:
+        preferenceQuery['drugsPref'] = {'$ne':ABSYES}
+
+    if currentUser['livingData']['guestsHabits'] >= 0:
+        preferenceQuery['guestsPref'] = {'$ne':ABSNO}
+    else:
+        preferenceQuery['guestsPref'] = {'$ne':ABSYES}
+
+
+
+    #queries in $or for reverse same preferences
+    orQueries = []
+
+    orQueries.append(
+        {
+            '$or':[
+            {'profile.preferences.sameOccupationPref':ABSYES,
+            'profile.livingData.occupation':currentUser['livingData']['occupation']},
+            {'profile.preferences.sameOccupationPref':ABSNO,
+            'profile.livingData.occupation':{'$ne':currentUser['livingData']['occupation']}},
+            {'profile.preferences.sameOccupationPref':{'$nin':[ABSYES, ABSNO]}}
+        ]
+        }
+    )
+    orQueries.append(
+        {
+            '$or':[
+            {'profile.preferences.sameAgePrefPref':ABSYES,
+            'profile.personalData.age':{'$gte': currentUser['personalData']['age']-AGEWINDOW, '$lte':currentUser['personalData']['age']+AGEWINDOW}},
+            {'profile.preferences.sameAgePrefPref':ABSNO,
+            'profile.personalData.age':{'$lte': currentUser['personalData']['age']-AGEWINDOW, '$gte':currentUser['personalData']['age']+AGEWINDOW}},
+            {'profile.preferences.sameAgePrefPref':{'$nin':[ABSYES, ABSNO]}}
+        ]
+        }
+    )
+
+    orQueries.append(
+        {
+            '$or':[
+            {'profile.preferences.sameGenderPrefPref':ABSYES,
+            'profile.personalData.gender':currentUser['personalData']['gender']},
+            {'profile.preferences.sameGenderPrefPref':ABSNO,
+            'profile.personalData.gender':{'$ne':currentUser['personalData']['gender']}},
+            {'profile.preferences.sameGenderPrefPref':{'$nin':[ABSYES, ABSNO]}}
+        ]
+        }
+    )
+
+    orQueries.append(
+        {
+            '$or':[
+            {'profile.preferences.sameNationalityPrefPref':ABSYES,
+            'profile.personalData.nationality.code':currentUser['personalData']['nationality']['code']},
+            {'profile.preferences.sameNationalityPrefPref':ABSNO,
+            'profile.personalData.nationality.code':{'$ne':currentUser['personalData']['nationality']['code']}},
+            {'profile.preferences.sameNationalityPrefPref':{'$nin':[ABSYES, ABSNO]}}
+        ]
+        }
+    )
+
+    for queryfield in personalQuery:
+        query[f'profile.personalData.{queryfield}'] = personalQuery[queryfield]
+    for queryfield in livingQuery:
+        query[f'profile.livingData.{queryfield}'] = livingQuery[queryfield]
+    for queryfield in preferenceQuery:
+        query[f'profile.preferences.{queryfield}'] = preferenceQuery[queryfield]
+    query['$and'] = orQueries
+
+    results = userCollection.find(query)
+    print(query)
+    print(results.count())
+    
+    computeScores(cu, results, matchesCollection)
+
+
+def computeScores(cu, otherUsers, matchesCollection):
+    
+    currentUser = cu['profile']
+    
+    for ou in otherUsers:
+        
+        otherUser = ou['profile']
+
+        currentToOther = 0
+
+        #add partial scores based on compatibility of values
+
+        if otherUser['preferences']['maxBudget'] <= currentUser['preferences']['maxBudget'] and otherUser['preferences']['maxBudget'] >= currentUser['preferences']['maxBudget']*(1-BUDGETTOLERANCE):
+            currentToOther += 1
+
+
+        if currentUser['preferences']['smokingPref'] == 0:
+            currentToOther += 1
+        else:
+            currentToOther += currentUser['preferences']['smokingPref']*otherUser['livingData']['smokingHabits']
+        if currentUser['preferences']['cleaningPref'] == 0:
+            currentToOther += 1
+        else:
+            currentToOther += currentUser['preferences']['cleaningPref']*otherUser['livingData']['cleaningHabits']
+
+        if currentUser['preferences']['drinkingPref'] == 0:
+            currentToOther += 1
+        else:
+            currentToOther += currentUser['preferences']['drinkingPref']*otherUser['livingData']['drinkingHabits']
+
+        if currentUser['preferences']['drugsPref'] == 0:
+            currentToOther += 1
+        else:
+            currentToOther += currentUser['preferences']['drugsPref']*otherUser['livingData']['drugsHabits']
+
+        if currentUser['preferences']['guestsPref'] == 0:
+            currentToOther += 1
+        else:
+            currentToOther += currentUser['preferences']['guestsPref']*otherUser['livingData']['guestsHabits']
+
+
+
+        if currentUser['preferences']['livingPref'] == 0:
+            currentToOther += 1
+        elif currentUser['preferences']['livingPref'] == otherUser['preferences']['livingPref']:
+            currentToOther += 1
+        else:
+            currentToOther += 0
+
+
+
+        if currentUser['preferences']['childrenPref'] == 0:
+            currentToOther += 1
+        elif otherUser['livingData']['hasChildren']:
+            currentToOther += currentUser['preferences']['childrenPref']
+        else:
+            currentToOther -= currentUser['preferences']['childrenPref']
+
+
+        if currentUser['preferences']['petsPref'] == 0:
+            currentToOther += 1
+        elif otherUser['livingData']['hasPets']:
+            currentToOther += currentUser['preferences']['petsPref']
+        else:
+            currentToOther -= currentUser['preferences']['petsPref']
+
+
+        if currentUser['preferences']['sameAgePref'] == 0:
+            currentToOther += 1
+        elif otherUser['personalData']['age'] <= currentUser['personalData']['age'] + AGEWINDOW and otherUser['personalData']['age'] >= currentUser['personalData']['age'] - AGEWINDOW:
+            currentToOther += currentUser['preferences']['sameAgePref']
+        else:
+            currentToOther -= currentUser['preferences']['sameAgePref']
+
+        if currentUser['preferences']['sameGenderPref'] == 0:
+            currentToOther += 1
+        elif otherUser['personalData']['gender'] == currentUser['personalData']['gender']:
+            currentToOther += currentUser['preferences']['sameGenderPref']
+        else:
+            currentToOther -= currentUser['preferences']['sameGenderPref']
+
+        if currentUser['preferences']['sameOccupationPref'] == 0:
+            currentToOther += 1
+        elif otherUser['livingData']['occupation'] == currentUser['livingData']['occupation']:
+            currentToOther += currentUser['preferences']['sameOccupationPref']
+        else:
+            currentToOther -= currentUser['preferences']['sameOccupationPref']
+
+        if currentUser['preferences']['sameNationalityPref'] == 0:
+            currentToOther += 1
+        elif otherUser['personalData']['nationality']['code'] == currentUser['personalData']['nationality']['code']:
+            currentToOther += currentUser['preferences']['sameNationalityPref']
+        else:
+            currentToOther -= currentUser['preferences']['sameNationalityPref']
+
+
+
+
+
+        otherToCurrent = 0
+
+        #add partial scores based on compatibility of values
+        if currentUser['preferences']['maxBudget'] <= otherUser['preferences']['maxBudget'] and currentUser['preferences']['maxBudget'] >= otherUser['preferences']['maxBudget']*(1-BUDGETTOLERANCE):
+            currentToOther += 1
+
+
+        if otherUser['preferences']['smokingPref'] == 0:
+            otherToCurrent += 1
+        else:
+            otherToCurrent += otherUser['preferences']['smokingPref']*currentUser['livingData']['smokingHabits']
+        
+        if otherUser['preferences']['guestsPref'] == 0:
+            otherToCurrent += 1
+        else:
+            otherToCurrent += otherUser['preferences']['guestsPref']*currentUser['livingData']['guestsHabits']
+
+        if otherUser['preferences']['drinkingPref'] == 0:
+            otherToCurrent += 1
+        else:
+            otherToCurrent += otherUser['preferences']['drinkingPref']*currentUser['livingData']['drinkingHabits']
+
+        if otherUser['preferences']['drugsPref'] == 0:
+            otherToCurrent += 1
+        else:
+            otherToCurrent += otherUser['preferences']['drugsPref']*currentUser['livingData']['drugsHabits']
+
+        if otherUser['preferences']['cleaningPref'] == 0:
+            otherToCurrent += 1
+        else:
+            otherToCurrent += otherUser['preferences']['cleaningPref']*currentUser['livingData']['cleaningHabits']
+
+
+        if otherUser['preferences']['livingPref'] == 0:
+            otherToCurrent += 1
+        elif otherUser['preferences']['livingPref'] == currentUser['preferences']['livingPref']:
+            otherToCurrent += 1
+        else:
+            otherToCurrent += 0
+
+
+        if otherUser['preferences']['childrenPref'] == 0:
+            otherToCurrent += 1
+        elif currentUser['livingData']['hasChildren']:
+            otherToCurrent += otherUser['preferences']['childrenPref']
+        else:
+            otherToCurrent -= otherUser['preferences']['childrenPref']
+
+
+        if otherUser['preferences']['petsPref'] == 0:
+            otherToCurrent += 1
+        elif currentUser['livingData']['hasPets']:
+            otherToCurrent += otherUser['preferences']['petsPref']
+        else:
+            otherToCurrent -= otherUser['preferences']['petsPref']
+
+        if otherUser['preferences']['sameGenderPref'] == 0:
+            otherToCurrent += 1
+        elif currentUser['personalData']['gender'] == otherUser['personalData']['gender']:
+            otherToCurrent += otherUser['preferences']['sameGenderPref']
+        else:
+            otherToCurrent -= otherUser['preferences']['sameGenderPref']
+
+        if otherUser['preferences']['sameOccupationPref'] == 0:
+            otherToCurrent += 1
+        elif currentUser['livingData']['occupation'] == otherUser['livingData']['occupation']:
+            otherToCurrent += otherUser['preferences']['sameOccupationPref']
+        else:
+            otherToCurrent -= otherUser['preferences']['sameOccupationPref']
+
+        if otherUser['preferences']['sameNationalityPref'] == 0:
+            otherToCurrent += 1
+        elif currentUser['personalData']['nationality']['code'] == otherUser['personalData']['nationality']['code']:
+            otherToCurrent += otherUser['preferences']['sameNationalityPref']
+        else:
+            otherToCurrent -= otherUser['preferences']['sameNationalityPref']
+
+        actualScore = min(currentToOther, otherToCurrent)
+
+        #symmetric parameters
+        if currentUser['personalData']['personality'] == otherUser['personalData']['personality']:
+            actualScore += 2
+
+        commonTags = [tag for tag in currentUser['extraData']['personalTags'] if tag in otherUser['extraData']['personalTags']]
+        commonInterests = [tag for tag in currentUser['extraData']['interestsTags'] if tag in otherUser['extraData']['interestsTags']]
+        commonalities = len(commonTags)+len(commonInterests)
+
+        actualScore += min(commonalities, 4)
+
+
+
+        finalScore = min(currentToOther, otherToCurrent) #least common score
+        #trim edges
+        finalScore = min(finalScore, MAXSCORE)
+        finalScore = max(finalScore, MINSCORE)
+        #normalize
+        finalScore = (finalScore - MINSCORE)/(MAXSCORE - MINSCORE)
+        finalScore = round(finalScore*100)
+        
+        u1 = min(cu['userId'], ou['userId'])
+        u2 = max(cu['userId'], ou['userId'])
+        matchesCollection.replace_one({'u1':u1, 'u2': u2}, {'u1':u1, 'u2': u2, 'score' : finalScore}, True)
